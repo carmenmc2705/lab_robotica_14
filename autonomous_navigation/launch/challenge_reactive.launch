@@ -21,7 +21,8 @@
     <!-- find command is used to resolve the path of a package -->
 
     <node pkg="turtlebot3_teleop" type="turtlebot3_teleop_key" name="turtlebot3_teleop_keyboard"  output="screen"/>
-
+    <!-- Robot automatic controller node -->
+    <node pkg="autonomous_navigation" type="robot_controller.py" name="turtlebot_controller" output="screen"/>
     <!-- we could place some param tags here -->
 
 </launch>
