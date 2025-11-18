@@ -19,7 +19,6 @@
 	<node name="rviz" pkg="rviz" type="rviz" args="-d $(find autonomous_navigation)/config/challenge_reactive.rviz"/>
 
     <!-- find command is used to resolve the path of a package -->
-    <include file="$(find turtlebot3_gazebo)/launch/turtlebot3_empty_world.launch"/>
 
     <node pkg="turtlebot3_teleop" type="turtlebot3_teleop_key" name="turtlebot3_teleop_keyboard"  output="screen"/>
 
