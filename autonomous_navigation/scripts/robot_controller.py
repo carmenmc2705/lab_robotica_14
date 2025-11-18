@@ -4,9 +4,9 @@
 import math
 import rospy
 import tf
-from geometry_msgs.msg import Twist
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Twist, PoseStamped
 from sensor_msgs.msg import LaserScan
+from nav_msgs.msg import Path
 import numpy as np 
 
 class TurtlebotController():
@@ -15,120 +15,157 @@ class TurtlebotController():
         
         # Read parameters
         self.goal_tol = 0.15
-        
-        self.rate = rate # Hz  (1/Hz = secs)
+        self.rate = rate 
         
         # Initialize internal data 
         self.goal = PoseStamped()
-        self.goal_received = False
+        
+        # Variables para el Path
+        self.path_poses = []        # Lista para guardar el camino
+        self.path_received = False  # Bandera para saber si tenemos camino
+        self.current_goal_index = 0 # Índice para saber por qué punto vamos
+        
+        # Este lo mantenemos por si usas el 2D Nav Goal manual, aunque priorizaremos el path
+        self.goal_received = False 
+        self.lidar_data = None
 
         # Subscribers / publishers
         self.tf_listener = tf.TransformListener()
 
         self.cmd_vel_pub = rospy.Publisher("cmd_vel", Twist, queue_size=10)
+        
+        # Suscriptores
         rospy.Subscriber("move_base_simple/goal", PoseStamped, self.goalCallback)
-      
+        rospy.Subscriber("/scan", LaserScan, self.scanCallback)
+        rospy.Subscriber("/path", Path, self.pathCallback)
+        
         rospy.loginfo("TurtlebotController started")
         
 
     def shutdown(self):
-        # Stop turtlebot
         rospy.loginfo("Stop TurtleBot")
-        # A default Twist has linear.x of 0 and angular.z of 0.  So it'll stop TurtleBot
-        self.cmd_vel.publish(Twist())
-        # Sleep just makes sure TurtleBot receives the stop command prior to shutting down the script
+        self.cmd_vel_pub.publish(Twist())
         rospy.sleep(1)
 
+    def scanCallback(self, msg):
+        self.lidar_data = msg
+    
+    def pathCallback(self, msg):
+        # Solo actualizamos si es la primera vez o si quieres reiniciar el path
+        if not self.path_received:
+            rospy.loginfo("Path received with %d points.", len(msg.poses))
+            self.path_poses = msg.poses
+            self.current_goal_index = 0
+            self.path_received = True
 
-    def goalCallback(self,goal):
-        rospy.loginfo("Goal received! x: %.2f, y:%.2f", goal.pose.position.x, goal.pose.position.y)
+    def goalCallback(self, goal):
+        # Esto es por si usas el botón "2D Nav Goal" de RViz manualmente
+        rospy.loginfo("Manual Goal received!")
         self.goal = goal  
         self.goal_received = True
-
+        # Si recibimos un manual, desactivamos el path para que haga caso al manual
+        self.path_received = False 
 
     def command(self):
-
-        # Check if we already received data
-        if(self.goal_received == False):
-            rospy.loginfo("Goal not received. Waiting...")
+        # 1. COMPROBACIÓN DE DATOS
+        # Si no tenemos ni path ni goal manual, no hacemos nada
+        if not self.path_received and not self.goal_received:
             return
 
-        # Check if the final goal has been reached
-        if(self.goalReached()==True):
-            rospy.loginfo("GOAL REACHED!!! Stopping!")
-            self.publish(0.0, 0.0)
-            self.goal_received = False
+        # 2. GESTIÓN DEL PATH
+        # Si estamos siguiendo un path...
+        if self.path_received:
+            # Comprobar si hemos terminado la lista de puntos
+            if self.current_goal_index >= len(self.path_poses):
+                rospy.loginfo_throttle(5, "PATH FINISHED!!! Stopping!")
+                self.publish(0.0, 0.0)
+                return
+            
+            # Seleccionamos el objetivo actual de la lista
+            self.goal = self.path_poses[self.current_goal_index]
+
+        # 3. COMPROBAR SI HEMOS LLEGADO AL PUNTO ACTUAL
+        if self.goalReached():
+            rospy.loginfo("Waypoint reached! Moving to next...")
+            self.publish(0.0, 0.0) # Parada momentánea (opcional)
+            
+            if self.path_received:
+                self.current_goal_index += 1 # Pasamos al siguiente punto del path
+            else:
+                self.goal_received = False # Si era manual, ya hemos terminado
             return
         
-        #######################################################################################################
-        # Check for collisions                                                                                #
-        # Implement control law                                                                               #
-        # Note: You could transform next goal to local robot coordinates to compute control law more easily   #
-        # Note: You should saturate the maximum angular and linear robot velocities                           #
-        #######################################################################################################
+        # 4. CONTROL LAW (Moverse hacia self.goal)
+        try:
+            self.goal.header.stamp = rospy.Time(0) # Importante usar Time(0) para coger la última transformada disponible
+            pose_transformed = self.tf_listener.transformPose('base_footprint', self.goal)
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            return    
             
+        goal_x = pose_transformed.pose.position.x
+        goal_y = pose_transformed.pose.position.y  
+        
+        angle_to_goal = math.atan2(goal_y, goal_x)
+        distance_to_goal = math.sqrt(goal_x**2 + goal_y**2)
+        
+        # Proportional controller
+        K_linear = 0.5
+        K_angular = 1.5
+        
+        linear = K_linear * distance_to_goal
+        angular = K_angular * angle_to_goal
+        
+        # 5. EVASIÓN DE OBSTÁCULOS
+        if self.lidar_data:
+            ranges = self.lidar_data.ranges
+            # Cogemos un sector frontal (-20 grados a +20 grados aprox)
+            front = ranges[0:20] + ranges[-20:]
+            valid_front = [r for r in front if r > 0.1 and r < 10.0]
+            
+            if valid_front and min(valid_front) < 0.5:
+                rospy.logwarn_throttle(1, "Obstacle detected! Evading...")
+                linear = 0.0
+                angular = 0.6 # Girar a la izquierda
+                
+        # Saturate velocities
+        linear = min(linear, 0.22)
+        angular = max(min(angular, 1.0), -1.0)
+        
         # Publish velocity command
-        self.publish(linear,angular)
-        return False
+        self.publish(linear, angular)
 
 
     def goalReached(self):
-        # Return True if the FINAL goal was reached, False otherwise
-
-        if self.goal_received:
-            pose_transformed = PoseStamped()
-
-            # Update the goal timestamp to avoid issues with TF transform
-            self.goal.header.stamp = rospy.Time()
-
-            try:
-                pose_transformed = self.tf_listener.transformPose('base_footprint', self.goal)
-            except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-                rospy.loginfo("Problem TF")
-                return False
-
+        # Usamos try-except porque TF puede fallar puntualmente
+        try:
+            self.goal.header.stamp = rospy.Time(0)
+            pose_transformed = self.tf_listener.transformPose('base_footprint', self.goal)
             goal_distance = math.sqrt(pose_transformed.pose.position.x ** 2 + pose_transformed.pose.position.y ** 2)
-            if(goal_distance < self.goal_tol):
+            
+            if goal_distance < self.goal_tol:
                 return True
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            return False
 
         return False
 
     
     def publish(self, lin_vel, ang_vel):
-        # Twist is a datatype for velocity
         move_cmd = Twist()
-        # Copy the forward velocity
         move_cmd.linear.x = lin_vel
-        # Copy the angular velocity
         move_cmd.angular.z = ang_vel
-        rospy.loginfo("Commanding lv: %.2f, av: %.2f", lin_vel, ang_vel)
         self.cmd_vel_pub.publish(move_cmd)
 
 
 if __name__ == '__main__':
-    
-    # Initiliaze
     rospy.init_node('TurtlebotController', anonymous=False)
-
-    # Tell user how to stop TurtleBot
     rospy.loginfo("To stop TurtleBot CTRL + C")
 
-    rate = 10 # Frecuency (Hz) for commanding the robot
+    rate = 10 
     robot = TurtlebotController(rate)
-        
-    # What function to call when you CTRL + C    
     rospy.on_shutdown(robot.shutdown)
         
-    # TurtleBot will stop if we don't keep telling it to move.  How often should we tell it to move? 10 HZ
     r = rospy.Rate(rate)
-        
-    # As long as you haven't CTRL + C keeping doing...
-    while not (rospy.is_shutdown()):
-        
-	    # Publish the velocity
+    while not rospy.is_shutdown():
         robot.command()
-
-        # Wait for 0.1 seconds (10 HZ) and publish again
         r.sleep()
-
-        
