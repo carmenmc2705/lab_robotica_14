@@ -128,7 +128,7 @@ class TurtlebotController():
                 angular = 0.6 # Girar a la izquierda
                 
         # Saturate velocities
-        linear = min(linear, 0.22)
+        linear = min(linear, 1.0)
         angular = max(min(angular, 1.0), -1.0)
         
         # Publish velocity command
