@@ -6,6 +6,8 @@ import rospy
 import tf
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import PoseStamped
+from sensor_msgs.msg import LaserScan
+import numpy as np 
 
 class TurtlebotController():
     
