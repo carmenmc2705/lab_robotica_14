@@ -21,11 +21,10 @@
     <!-- find command is used to resolve the path of a package -->
     <include file="$(find turtlebot3_gazebo)/launch/turtlebot3_empty_world.launch"/>
 
-    <node pkg="turtlebot3_teleop" type="turtlebot3_teleop_key" name="turtlebot3_teleop_keyboard"  output="screen">
+    <node pkg="turtlebot3_teleop" type="turtlebot3_teleop_key" name="turtlebot3_teleop_keyboard"  output="screen"/>
 
     <!-- we could place some param tags here -->
 
-    </node>
 </launch>
 
 
