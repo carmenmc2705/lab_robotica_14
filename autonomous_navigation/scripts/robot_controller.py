@@ -235,6 +235,10 @@ class TurtlebotController():
 
             linear = self.K_linear * distance_to_goal * speed_scale
             angular = self.K_angular * angle_to_goal
+            
+            max_safe_speed = regions['front'] * 0.7  
+            if linear > max_safe_speed:
+                linear = max_safe_speed
 
             # limitar giro si vamos muy cerca
             if abs(angular) > self.MAX_ANGULAR:
