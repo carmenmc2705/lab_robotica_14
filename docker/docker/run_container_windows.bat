@@ -3,6 +3,6 @@ docker run -it ^
 --name lab_rob_container ^
 --net=host ^
 --privileged ^
---mount type=bind,source=C:\Users\carme\lab_rob_shared,target=/home/grupo14/lab_rob_shared ^
+--mount type=bind,source=C:\Users\mapy7\lab_rob_shared,target=/home/grupo14/lab_rob_shared ^
 lab_rob_image ^
 bash
