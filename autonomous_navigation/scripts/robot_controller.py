@@ -177,7 +177,7 @@ class TurtlebotController():
             if regions['front'] < self.OBSTACLE_DIST:
                 self._start_avoid()
 
-        elif self.state == 'AVOID':
+        elif obstacle_front and self.state == 'AVOID':
             # En AVOID: girar hacia lado con más espacio (decisión discreta)
             linear = 0.0
             left_clear = regions['left']
@@ -186,14 +186,15 @@ class TurtlebotController():
             # Si ambos lados tienen espacio semejante, usar orientación del objetivo:
             # si objetivo está a la izquierda (goal_y > 0) preferir izquierda, sino derecha.
             # Preferencia por el lado con mayor distancia.
-            if left_clear > right_clear:
-                angular = 0.9
-            elif right_clear > left_clear:
-                angular = -0.9
-            else:
-                # empate -> preferir según señal del objetivo
-                angular = 0.9 if goal_y > 0 else -0.9
+            # Solo cambiar de dirección si la diferencia es significativa
+            DIFF_THRESHOLD = 0.2  # metros
+            if left_clear - right_clear > DIFF_THRESHOLD:
+                self.avoid_direction = 1    # izquierda
+            elif right_clear - left_clear > DIFF_THRESHOLD:
+                self.avoid_direction = -1   # derecha
+             # si la diferencia es pequeña, mantiene la dirección actual
 
+            angular = 0.9 * self.avoid_direction
             # Condición para dejar AVOID:
             # -> frente libre suficientemente y el ángulo al objetivo razonable
             if regions['front'] > self.SAFE_DIST and abs(angle_to_goal) < 0.7:
