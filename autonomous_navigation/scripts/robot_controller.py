@@ -15,7 +15,6 @@ class TurtlebotController():
         
         # Read parameters
         self.goal_tol = 0.15
-        self.angle_tol = 0.4 
         self.rate = rate 
         
         # Initialize internal data 
@@ -28,7 +27,6 @@ class TurtlebotController():
         
         # Este lo mantenemos por si usas el 2D Nav Goal manual, aunque priorizaremos el path
         self.goal_received = False 
-        self.goal = PoseStamped()
         self.lidar_data = None
 
         # Subscribers / publishers
@@ -89,12 +87,12 @@ class TurtlebotController():
         # 3. COMPROBAR SI HEMOS LLEGADO AL PUNTO ACTUAL
         if self.goalReached():
             rospy.loginfo("Waypoint reached! Moving to next...")
-            self.publish(0.0, 0.0) # Parada momentánea (opcional)
             
             if self.path_received:
                 self.current_goal_index += 1 # Pasamos al siguiente punto del path
             else:
                 self.goal_received = False # Si era manual, ya hemos terminado
+                self.publish(0.0, 0.0)
             return
         
         # 4. CONTROL LAW (Moverse hacia self.goal)
@@ -102,6 +100,7 @@ class TurtlebotController():
             self.goal.header.stamp = rospy.Time(0) # Importante usar Time(0) para coger la última transformada disponible
             pose_transformed = self.tf_listener.transformPose('base_footprint', self.goal)
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            rospy.logwarn_throttle(1, "TF Error: No transform found") # Debug
             return    
             
         goal_x = pose_transformed.pose.position.x
@@ -111,8 +110,8 @@ class TurtlebotController():
         distance_to_goal = math.sqrt(goal_x**2 + goal_y**2)
         
         # Proportional controller
-        K_linear = 1.8
-        K_angular = 3.0
+        K_linear = 0.5
+        K_angular = 1.5
         
         linear = K_linear * distance_to_goal
         angular = K_angular * angle_to_goal
@@ -127,11 +126,17 @@ class TurtlebotController():
             if valid_front and min(valid_front) < 0.5:
                 rospy.logwarn_throttle(1, "Obstacle detected! Evading...")
                 linear = 0.0
-                angular = 0.8 # Girar a la izquierda
+                left_space = sum(ranges[20:80])
+                right_space = sum(ranges[-80:-20])                
+                if left_space > right_space:
+                    angular = 0.6   # gira izquierda
+                else:
+                    angular = -0.6  # Girar a la izquierda
                 
         # Saturate velocities
-        linear = max(min(linear, 0.8), -0.8)
-        angular = max(min(angular, 2.5), -2.5)
+        linear = min(linear, 0.22) # Max velocidad real del robot
+        linear = max(linear, 0.0)
+        angular = max(min(angular, 1.0), -1.0)
         
         # Publish velocity command
         self.publish(linear, angular)
@@ -149,7 +154,7 @@ class TurtlebotController():
             angle = math.atan2(dy, dx)
 
             # Condición mejorada → evita esperas innecesarias
-            if distance < self.goal_tol and abs(angle) < self.angle_tol:
+            if distance < self.goal_tol:
                 return True
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             return False
