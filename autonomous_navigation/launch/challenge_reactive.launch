@@ -11,9 +11,9 @@
     </include>
     
     <!-- Launch the path publisher -->
-	<include file="$(find autonomous_navigation)/launch/path_publisher.launch">
+	<!--<include file="$(find autonomous_navigation)/launch/path_publisher.launch">
 	    <arg name="path_file" value="path"/>
-	</include>
+	</include>-->
     
     <!-- Launch RViz -->
 	<node name="rviz" pkg="rviz" type="rviz" args="-d $(find autonomous_navigation)/config/challenge_reactive.rviz"/>
