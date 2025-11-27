@@ -109,7 +109,7 @@ class TurtlebotController():
         distance_to_goal = math.sqrt(goal_x**2 + goal_y**2)
         
         # Proportional controller
-        K_linear = 0.5
+        K_linear = 1.0
         K_angular = 1.5
         
         linear = K_linear * distance_to_goal

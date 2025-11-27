@@ -6,5 +6,3 @@ docker run -it ^
 --mount type=bind,source=C:\Users\carme\lab_rob_shared,target=/home/grupo14/lab_rob_shared ^
 lab_rob_image ^
 bash
-    
-docker rm lab_rob_container
