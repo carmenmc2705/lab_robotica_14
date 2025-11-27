@@ -128,15 +128,16 @@ class TurtlebotController():
                 linear = 0.0
                 left_space = sum(ranges[20:80])
                 right_space = sum(ranges[-80:-20])                
-                if left_space > right_space:
+                if left_space > right_space+0.5:
                     angular = 0.6   # gira izquierda
+                elif right_space > left_space + 0.5: # Solo si derecha es CLARAMENTE mejor
+                    angular = -0.6 
                 else:
-                    angular = -0.6  # Girar a la izquierda
+                    angular = 0.6  # Girar a la izquierda
                 
         # Saturate velocities
-        linear = min(linear, 0.22) # Max velocidad real del robot
-        linear = max(linear, 0.0)
-        angular = max(min(angular, 1.0), -1.0)
+        #linear = min(linear, 0.22) 
+        #angular = max(min(angular, 1.0), -1.0)
         
         # Publish velocity command
         self.publish(linear, angular)
