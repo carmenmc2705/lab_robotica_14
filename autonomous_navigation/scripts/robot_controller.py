@@ -42,7 +42,7 @@ class TurtlebotController():
         self.path_received = False  # Bandera para saber si tenemos camino
         self.current_goal_index = 0 # Índice para saber por qué punto vamos
         
-        # Este lo mantenemos por si usas el 2D Nav Goal manual, aunque priorizaremos el path
+        # Este lo mantenemos por si usas el 2D Nav Goal manual
         self.goal_received = False 
         self.lidar_data = None
 
@@ -68,7 +68,6 @@ class TurtlebotController():
         self.lidar_data = msg
     
     def pathCallback(self, msg):
-        # Solo actualizamos si es la primera vez o si quieres reiniciar el path
         if not self.path_received:
             rospy.loginfo("Path received with %d points.", len(msg.poses))
             self.path_poses = msg.poses
@@ -76,11 +75,9 @@ class TurtlebotController():
             self.path_received = True
 
     def goalCallback(self, goal):
-        # Esto es por si usas el botón "2D Nav Goal" de RViz manualmente
         rospy.loginfo("Manual Goal received!")
         self.goal = goal  
         self.goal_received = True
-        # Si recibimos un manual, desactivamos el path para que haga caso al manual
         self.path_received = False 
         
  # ---------- NUEVAS FUNCIONES AUXILIARES ----------
@@ -121,20 +118,16 @@ class TurtlebotController():
 
     def command(self):
         # 1. COMPROBACIÓN DE DATOS
-        # Si no tenemos ni path ni goal manual, no hacemos nada
         if not self.path_received and not self.goal_received:
             return
 
         # 2. GESTIÓN DEL PATH
-        # Si estamos siguiendo un path...
         if self.path_received:
-            # Comprobar si hemos terminado la lista de puntos
             if self.current_goal_index >= len(self.path_poses):
                 rospy.loginfo_throttle(5, "PATH FINISHED!!! Stopping!")
                 self.publish(0.0, 0.0)
                 return
             
-            # Seleccionamos el objetivo actual de la lista
             self.goal = self.path_poses[self.current_goal_index]
         # Transformar goal a base_footprint
         try:
@@ -151,102 +144,65 @@ class TurtlebotController():
         # 3. COMPROBAR SI HEMOS LLEGADO AL PUNTO ACTUAL
         if self.goalReached():
             rospy.loginfo("Waypoint reached! Moving to next...")
+            # No paramos (self.publish(0,0)) para que sea más fluido, 
+            # pasamos directamente al siguiente
             
             if self.path_received:
-                self.current_goal_index += 1 # Pasamos al siguiente punto del path
+                self.current_goal_index += 1 
             else:
-                self.goal_received = False # Si era manual, ya hemos terminado
-                self.publish(0.0, 0.0)
+                self.goal_received = False 
+                self.publish(0.0, 0.0) # Si era manual y llegamos, paramos.
             return
         
         # 4. CONTROL LAW (Moverse hacia self.goal)
         try:
-            self.goal.header.stamp = rospy.Time(0) # Importante usar Time(0) para coger la última transformada disponible
+            self.goal.header.stamp = rospy.Time(0) 
             pose_transformed = self.tf_listener.transformPose('base_footprint', self.goal)
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-            rospy.logwarn_throttle(1, "TF Error: No transform found") # Debug
             return    
             
         goal_x = pose_transformed.pose.position.x
         goal_y = pose_transformed.pose.position.y  
         
+        # Calculamos el ángulo hacia el objetivo
         angle_to_goal = math.atan2(goal_y, goal_x)
         distance_to_goal = math.sqrt(goal_x**2 + goal_y**2)
-
-
-        # Chequeo de llegada
-        if self.goalReached():
-            rospy.loginfo("Waypoint reached!")
-            if self.path_received:
-                self.current_goal_index += 1
-            else:
-                self.goal_received = False
-            # parada breve
-            self.publish(0.0, 0.0)
-            return
-
-        # Lectura LIDAR y regiones
-        regions = self._get_lidar_regions(self.lidar_data.ranges) if self.lidar_data else {'front': float('inf'), 'left': float('inf'), 'right': float('inf')}
-
-        # Decide transición a AVOID si hay obstáculo cerca
-        obstacle_front = regions['front'] < self.OBSTACLE_DIST
-
-        # Timeout de seguridad en AVOID
-        if self.state == 'AVOID':
-            # Si timeout excedido -> volver a NAV para evitar quedar bloqueado
-            if (rospy.Time.now() - self.avoid_start_time).to_sec() > self.avoid_timeout:
-                rospy.logwarn("AVOID timeout exceeded; forcing NAV")
-                self._stop_avoid()
-
-        # Si hay obstáculo en frente y no estamos ya evitando -> entrar en AVOID
-        if obstacle_front and self.state != 'AVOID':
-            self._start_avoid()
-
-        # ---------- COMPORTAMIENTO EN CADA ESTADO ----------
-        linear = 0.0
-        angular = 0.0
-
-        if self.state == 'NAV':
-            # Control proporcional hacia objetivo (cuando no hay obstáculo crítico)
-            linear = self.K_linear * distance_to_goal
-            angular = self.K_angular * angle_to_goal
-
-            # Si durante NAV detectamos obstáculo cercano en lado con menos espacio vamos a AVOID
-            if regions['front'] < self.OBSTACLE_DIST:
-                self._start_avoid()
-
-        elif self.state == 'AVOID':
-            # En AVOID: girar hacia lado con más espacio (decisión discreta)
-            linear = 0.0
-            left_clear = regions['left']
-            right_clear = regions['right']
-
-            # Si ambos lados tienen espacio semejante, usar orientación del objetivo:
-            # si objetivo está a la izquierda (goal_y > 0) preferir izquierda, sino derecha.
-            # Preferencia por el lado con mayor distancia.
-            if left_clear > right_clear:
-                angular = 0.9
-            elif right_clear > left_clear:
-                angular = -0.9
-            else:
-                # empate -> preferir según señal del objetivo
-                angular = 0.9 if goal_y > 0 else -0.9
-
-            # Condición para dejar AVOID:
-            # -> frente libre suficientemente y el ángulo al objetivo razonable
-            if regions['front'] > self.SAFE_DIST and abs(angle_to_goal) < 0.7:
-                self._stop_avoid()
-
-        # Saturación de velocidades
-        linear = max(min(linear, self.MAX_LINEAR), -self.MAX_LINEAR)
-        angular = max(min(angular, self.MAX_ANGULAR), -self.MAX_ANGULAR)
-
-        # Publicar comando
+        
+        # Proportional controller
+        K_linear = 0.5
+        K_angular = 1.5
+        
+        linear = K_linear * distance_to_goal
+        angular = K_angular * angle_to_goal
+        
+        # 5. EVASIÓN DE OBSTÁCULOS
+        if self.lidar_data:
+            ranges = self.lidar_data.ranges
+            # Cogemos un sector frontal (-20 grados a +20 grados aprox)
+            front = ranges[0:20] + ranges[-20:]
+            valid_front = [r for r in front if r > 0.1 and r < 10.0]
+            
+            if valid_front and min(valid_front) < 0.5:
+                rospy.logwarn_throttle(1, "Obstacle detected! Evading...")
+                linear = 0.0
+                left_space = sum(ranges[20:80])
+                right_space = sum(ranges[-80:-20])                
+                if left_space > right_space+0.5:
+                    angular = 0.6   # gira izquierda
+                elif right_space > left_space + 0.5: # Solo si derecha es CLARAMENTE mejor
+                    angular = -0.6 
+                else:
+                    angular = 0.6  # Girar a la izquierda
+                
+        # Saturate velocities
+        #linear = min(linear, 0.22) 
+        #angular = max(min(angular, 1.0), -1.0)
+        
+        # Publish velocity command
         self.publish(linear, angular)
 
 
     def goalReached(self):
-        # Usamos try-except porque TF puede fallar puntualmente
         try:
             self.goal.header.stamp = rospy.Time(0)
             pose_transformed = self.tf_listener.transformPose('base_footprint', self.goal)
@@ -257,7 +213,7 @@ class TurtlebotController():
             angle = math.atan2(dy, dx)
 
             # Condición mejorada → evita esperas innecesarias
-            if distance < self.goal_tol and abs(angle) < self.angle_tol:
+            if distance < self.goal_tol:
                 return True
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             return False
