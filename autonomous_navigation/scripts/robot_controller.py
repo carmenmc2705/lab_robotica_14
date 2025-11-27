@@ -15,6 +15,7 @@ class TurtlebotController():
         
         # Read parameters
         self.goal_tol = 0.15
+        self.angle_tol = 0.4 
         self.rate = rate 
         
         # Initialize internal data 
@@ -27,6 +28,7 @@ class TurtlebotController():
         
         # Este lo mantenemos por si usas el 2D Nav Goal manual, aunque priorizaremos el path
         self.goal_received = False 
+        self.goal = PoseStamped()
         self.lidar_data = None
 
         # Subscribers / publishers
@@ -109,8 +111,8 @@ class TurtlebotController():
         distance_to_goal = math.sqrt(goal_x**2 + goal_y**2)
         
         # Proportional controller
-        K_linear = 1.0
-        K_angular = 1.5
+        K_linear = 1.8
+        K_angular = 3.0
         
         linear = K_linear * distance_to_goal
         angular = K_angular * angle_to_goal
@@ -125,11 +127,11 @@ class TurtlebotController():
             if valid_front and min(valid_front) < 0.5:
                 rospy.logwarn_throttle(1, "Obstacle detected! Evading...")
                 linear = 0.0
-                angular = 0.6 # Girar a la izquierda
+                angular = 0.8 # Girar a la izquierda
                 
         # Saturate velocities
-        linear = min(linear, 1.0)
-        angular = max(min(angular, 1.0), -1.0)
+        linear = max(min(linear, 0.8), -0.8)
+        angular = max(min(angular, 2.5), -2.5)
         
         # Publish velocity command
         self.publish(linear, angular)
@@ -140,9 +142,14 @@ class TurtlebotController():
         try:
             self.goal.header.stamp = rospy.Time(0)
             pose_transformed = self.tf_listener.transformPose('base_footprint', self.goal)
-            goal_distance = math.sqrt(pose_transformed.pose.position.x ** 2 + pose_transformed.pose.position.y ** 2)
-            
-            if goal_distance < self.goal_tol:
+            dx = pose_transformed.pose.position.x
+            dy = pose_transformed.pose.position.y
+
+            distance = math.sqrt(dx**2 + dy**2)
+            angle = math.atan2(dy, dx)
+
+            # Condición mejorada → evita esperas innecesarias
+            if distance < self.goal_tol and abs(angle) < self.angle_tol:
                 return True
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             return False
