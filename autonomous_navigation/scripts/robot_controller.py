@@ -21,6 +21,7 @@ class TurtlebotController():
         self.state = 'NAV'  # 'NAV' o 'AVOID'
         self.avoid_start_time = None
         self.avoid_timeout = 3.0  # segundos máximo en modo AVOID por seguridad
+        self.avoid_direction = 1  # Inicialmente hacia la izquierda por defecto
 
         # Velocidades / ganancias
         self.K_linear = 0.5
