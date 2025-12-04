@@ -30,9 +30,9 @@ class TurtlebotController():
         self.MAX_ANGULAR = 2.0
 
         # LIDAR thresholds (ajustables)
-        self.OBSTACLE_DIST = 0.5   # distancia para considerar obstáculo cercano
+        self.OBSTACLE_DIST = 0.6   # distancia para considerar obstáculo cercano
         self.SAFE_DIST = 0.9       # distancia que consideramos "frente libre" para salir de AVOID
-        self.CLOSE_DIST = 0.35     # muy cerca -> frenar aun más
+        self.CLOSE_DIST = 0.4     # muy cerca -> frenar aun más
 
         # Objetivo / Path (aun cuando eliminas path, conservamos soporte a goal manual)
         self.goal = PoseStamped()
@@ -78,7 +78,7 @@ class TurtlebotController():
         self.path_received = False
 
     # ----------------------- LIDAR helpers -----------------------
-    def _index_from_angle(self, angle_rad):
+    def _index_from_angle(self, angle_deg):
         """
         Devuelve índice aproximado del array de ranges para un ángulo en radianes
         (ángulo en el sistema del LaserScan: angle_min + i*angle_increment).
@@ -86,54 +86,47 @@ class TurtlebotController():
         """
         msg = self.lidar_data
         if msg is None:
-            return None
-        ang_min = msg.angle_min
-        ang_inc = msg.angle_increment
+            return 0
         N = len(msg.ranges)
-        i = int(round((angle_rad - ang_min) / ang_inc))
-        # clamp
-        if i < 0:
-            i = 0
-        if i >= N:
-            i = N - 1
+        angle_deg = angle_deg % 360
+        i = int( (angle_deg / 360.0) * N )
+        i = i % N
         return i
 
-    def _sector_min(self, center_deg, width_deg, ranges):
-        """
-        center_deg: 0 adelante, +90 izquierda, -90 derecha (en grados)
-        width_deg: semiancho total (p.ej. 30 -> -15..+15 del centro)
-        """
-        if ranges is None:
-            return float('inf')
-        # convert degrees to radians (0 deg is front)
-        center = math.radians(center_deg)
-        half = math.radians(width_deg) / 2.0
-        msg = self.lidar_data
-        if msg is None:
-            return float('inf')
-
-        ang_min = msg.angle_min
-        ang_inc = msg.angle_increment
+    def _sector_data(self, center_deg, width_deg, ranges):
+        if ranges is None: return []
         N = len(ranges)
-
-        # generar índices
-        idxs = []
-        # muestreo denso: tomo índices entre center-half y center+half
-        a_start = center - half
-        a_end = center + half
-        i_start = int(math.floor((a_start - ang_min) / ang_inc))
-        i_end = int(math.ceil((a_end - ang_min) / ang_inc))
-        i_start = max(0, i_start)
-        i_end = min(N - 1, i_end)
+        
+        # Calculamos inicio y fin en grados
+        start_deg = center_deg - (width_deg / 2.0)
+        end_deg   = center_deg + (width_deg / 2.0)
+        
+        # Convertimos a índices usando la función corregida
+        i_start = self._index_from_angle(start_deg)
+        i_end   = self._index_from_angle(end_deg)
+        
+        # Extraer datos del array circular
         if i_start > i_end:
-            return float('inf')
-        sector = ranges[i_start:i_end + 1]
-        # normalizar NaNs e infs
-        sector = np.array(sector)
-        sector = np.where(np.isfinite(sector), sector, 100.0)
-        if sector.size == 0:
-            return float('inf')
-        return float(np.min(sector))
+            # Caso especial: El sector cruza el ángulo 0 (ej: de 350 a 10 grados)
+            # Concatenamos el final del array con el principio
+            sector = ranges[i_start:] + ranges[:i_end+1]
+        else:
+            # Caso normal
+            sector = ranges[i_start:i_end+1]
+            
+        # Limpieza de datos (quitar infs y ceros erróneos)
+        valid_data = [x for x in sector if x > 0.05 and math.isfinite(x)]
+        return valid_data
+    
+    def _sector_min(self, center_deg, width_deg, ranges):
+        data = self._sector_data(center_deg, width_deg, ranges)
+        if not data: return float('inf')
+        return min(data)
+
+    def _sector_avg(self, center_deg, width_deg, ranges):
+        data = self._sector_data(center_deg, width_deg, ranges)
+        if not data: return float('inf')
+        return sum(data) / len(data)
 
     def _get_lidar_regions(self, ranges):
         # Si no hay datos
@@ -141,26 +134,30 @@ class TurtlebotController():
             return {'front': float('inf'), 'left': float('inf'), 'right': float('inf')}
 
         # usamos centro 0 frente, 90 izq, -90 o 270 derecha
-        front_min = self._sector_min(0.0, 30.0, ranges)    # -15..+15
-        left_min = self._sector_min(90.0, 60.0, ranges)    # 60..120
-        right_min = self._sector_min(-90.0, 60.0, ranges)  # -120..-60
+        front_min = self._sector_min(0.0, 40.0, ranges)    # -15..+15
+        left_min = self._sector_min(60.0, 60.0, ranges)    # 60..120
+        right_min = self._sector_min(-60.0, 60.0, ranges)  # -120..-60
 
         return {'front': front_min, 'left': left_min, 'right': right_min}
 
     # ----------------------- Estado AVOID -----------------------
     def _start_avoid(self):
         # Elegimos dirección: preferimos lado con más espacio
-        regions = self._get_lidar_regions(self.lidar_data.ranges) if self.lidar_data else {'left': float('inf'), 'right': float('inf')}
-        if regions['left'] >= regions['right']:
+        regions = self._get_lidar_regions(self.lidar_data.ranges) if self.lidar_data else {'left': 0.0, 'right': 0.0}
+        
+        left_reg = regions['left']
+        right_reg = regions['right']
+        
+        rospy.loginfo("AVOID CHECK: Left=%.2f vs Right=%.2f", left_reg, right_reg)
+        if left_reg >= right_reg:
             self.avoid_direction = 1
         else:
             self.avoid_direction = -1
 
         self.state = 'AVOID_TURN'
         self.avoid_start_time = rospy.Time.now()
-        rospy.loginfo(">>> ENTERING AVOID MODE (dir=%s) front=%.2f left=%.2f right=%.2f",
-                      "L" if self.avoid_direction == 1 else "R",
-                      regions.get('front', float('inf')), regions.get('left', float('inf')), regions.get('right', float('inf')))
+        side_str = "LEFT" if self.avoid_direction == 1 else "RIGHT"
+        rospy.loginfo(">>> ENTERING AVOID MODE -> Turning %s", side_str)
 
     def _stop_avoid(self):
         self.state = 'NAV'
@@ -229,7 +226,7 @@ class TurtlebotController():
             # reducir velocidad si hay algo relativamente cerca para evitar choque
             speed_scale = 1.0
             if regions['front'] < self.CLOSE_DIST:
-                speed_scale = 0.15
+                speed_scale = 0.0
             elif regions['front'] < self.OBSTACLE_DIST:
                 speed_scale = 0.35
 
@@ -254,13 +251,28 @@ class TurtlebotController():
             front = regions['front']
             left = regions['left']
             right = regions['right']
-
+            # --- NUEVA LÓGICA: RE-EVALUACIÓN DINÁMICA ---
+            # Si estamos girando a la IZQUIERDA (1), pero de repente la izquierda se cierra
+            # y la derecha está MUCHO más libre, cambiamos de opinión.
+            # Lo mismo si estamos girando a la DERECHA (-1)
+            # Si derecha bloqueada  Y izquierda muy libre (> derecha + 0.5m)
+            if right < 0.4 and left > (right + 0.5):
+                self.avoid_direction = 1
+                rospy.loginfo("Re-evaluating: Switching to LEFT")
+            
+            # Si izquierda bloqueada  Y derecha muy libre (> izquierda + 0.5m)
+            if left < 0.4 and right > (left + 0.5):
+                self.avoid_direction = -1
+                rospy.loginfo("Re-evaluating: Switching to RIGHT")
+            
+            
+            # --------------------------------------------
             # velocidad de avance reducida (permite sortear esquinas)
             linear = 0.06 if front < self.CLOSE_DIST else 0.12
 
             # angular fijo hacia el lado elegido, más fuerte si muy cerca
-            ang_base = 0.9 if front < self.CLOSE_DIST else 0.6
-            angular = ang_base * float(self.avoid_direction)
+            ang_base = 1.2 #if front < self.CLOSE_DIST else 0.6
+            angular = ang_base * self.avoid_direction
 
             # Condition para pasar a AVOID_ADVANCE: cuando el frente esté razonablemente libre en SAFE_DIST
             if front > self.SAFE_DIST:
@@ -271,20 +283,19 @@ class TurtlebotController():
 
         elif self.state == 'AVOID_ADVANCE':
             # Avanzar pegado al obstáculo para "limpiar" la zona y volver a NAV después de un tiempo/espacio
-            linear = 0.18
-            angular = 0.18 * float(self.avoid_direction)  # ligera corrección para seguir borde
+            linear = 0.2
+            angular=0.9* angle_to_goal*self.avoid_direction
 
             # Si el frente queda despejado y ángulo hacia objetivo pequeño -> salir
-            if regions['front'] > self.SAFE_DIST and abs(angle_to_goal) < 0.6:
-                rospy.loginfo("Conditions met to exit AVOID (front=%.2f, angle=%.2f)", regions['front'], angle_to_goal)
+            if regions['front'] > self.SAFE_DIST:
+                rospy.loginfo("Path clear! Exiting AVOID -> NAV")
                 self._stop_avoid()
 
             # Safety: si volvemos a ver obstáculo frontal mientras avanzamos, volver a girar
             if regions['front'] < self.OBSTACLE_DIST:
-                rospy.loginfo("Obstacle re-detected during ADVANCE -> back to TURN")
+                rospy.loginfo("Wall detected while advancing -> Back to TURN")
                 self.state = 'AVOID_TURN'
                 self.avoid_start_time = rospy.Time.now()
-
         # Saturación de velocidades
         linear = max(min(linear, self.MAX_LINEAR), -self.MAX_LINEAR)
         angular = max(min(angular, self.MAX_ANGULAR), -self.MAX_ANGULAR)
@@ -304,7 +315,7 @@ class TurtlebotController():
             distance = math.hypot(dx, dy)
             angle = math.atan2(dy, dx)
 
-            return distance < self.goal_tol and abs(angle) < self.angle_tol
+            return distance < self.goal_tol
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             return False
 
