@@ -1,7 +1,7 @@
 
 <launch>
 
-    <arg name="world_name" default="turtlebot3_stage_2" />
+    <arg name="world_name" default="turtlebot3_stage_4" />
     <arg name="x_pos" default="0.0"/> 
     <arg name="y_pos" default="0.0"/>
     <arg name="z_pos" default="0"/>   
