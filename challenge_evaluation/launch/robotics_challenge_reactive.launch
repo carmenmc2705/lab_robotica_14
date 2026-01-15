@@ -20,7 +20,7 @@
 	<node name="rviz" pkg="rviz" type="rviz" args="-d $(find challenge_evaluation)/config/robotics_challenge_reactive.rviz"/>
        
 	<!-- Launch the reactive robot controller from autonomous_navigation package -->
-    <!-- TO BE COMPLETED -->
+    <node pkg="autonomous_navigation" type="robot_controller.py" name="turtlebot_controller" output="screen"/>
 
 </launch>
 
